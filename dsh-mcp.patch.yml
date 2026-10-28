@@ -1,0 +1,11 @@
+# 将此 insert 项合并到 DSH web profile 的 cordis.patch.yml；保留现有 QQ 条目。
+- insert:
+    - id: mcp-wechat-bridge
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: wechat
+        transport: stdio
+        command: 'C:\Users\aurelito\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe'
+        args:
+          - 'C:\Users\aurelito\Documents\Codex\2026-10-28\wo-x\outputs\wechat-bridge\src\mcp-server.js'
+        toolCallTimeoutMs: 110000
