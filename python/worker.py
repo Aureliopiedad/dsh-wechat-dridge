@@ -65,6 +65,9 @@ def operate(method, p):
     if method == "send":
         w, _ = switch(p["chat"])
         if p.get("file"):
+            label = w.SendMsg(msg=p["content"] + "\n以下文件由 AI 发送", who=p["chat"], clear=True, exact=True)
+            if not isinstance(label, dict) or label.get("status") != "成功":
+                raise RuntimeError(f"AI 文件标注发送失败: {label}")
             result = w.SendFiles(filepath=p["file"], who=p["chat"], exact=True)
         else:
             result = w.SendMsg(msg=p["content"], who=p["chat"], clear=True, exact=True)

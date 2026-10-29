@@ -15,13 +15,18 @@ export class Store {
     try { fs.writeFileSync(fd, JSON.stringify(this.data, null, 2)); fs.fsyncSync(fd); } finally {fs.closeSync(fd);}
     fs.renameSync(temp, this.file);
   }
-  ingest(events, baselines) {
+  ingest(events, baselines, wake = null) {
     const known = new Set(this.data.messages.map(m => m.id));
     for (const event of events) {
       if (known.has(event.id)) continue;
       known.add(event.id);
       this.data.messages.push(event);
-      this.data.inbox.push({...event, status: 'pending', requestId: event.id});
+      if (wake?.enabled && event.baselineOnly) continue;
+      if (wake?.enabled && !wake.answering) {
+        if (!event.content.includes(wake.word)) continue;
+        const context = this.data.messages.filter(m => m.chat === event.chat).slice(-wake.historyCount);
+        this.data.inbox.push({...event, context, wakeTriggered:true, status:'pending', requestId:event.id});
+      } else this.data.inbox.push({...event, status: 'pending', requestId: event.id});
     }
     Object.assign(this.data.baselines, baselines);
     // inbox/outbox 历史保留用于幂等；原型阶段不自动清理投递凭据。

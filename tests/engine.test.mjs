@@ -32,6 +32,7 @@ test('发送幂等与目标/session 绑定',async t=>{
   const f=fixture(t); f.store.data.sessions.Alice='s';
   const a={to_user:'Alice',message:'hi',request_id:'send1',session_id:'s'};
   await Promise.all([f.engine.send(a),f.engine.send(a)]); assert.equal(f.sends.length,1);
+  assert.equal(f.sends[0].content, '【AI回复】\nhi');
   await assert.rejects(f.engine.send({...a,message:'different'}),/不同消息/);
   await assert.rejects(f.engine.send({...a,to_user:'Bob'}),/名单/);
   await assert.rejects(f.engine.send({...a,session_id:'other'}),/不匹配/);
@@ -47,6 +48,7 @@ test('tools 模式不自动发最终文本，auto 模式发一次',async t=>{
     const f=fixture(t,{replyMode}); f.store.data.sessions.Alice='s';
     for(const event of [{seq:1,type:'turn/start',data:{turn:'t'}},{seq:2,type:'assistant/message',data:{turn:'t',message:{content:[{type:'text',text:'reply'}]}}},{seq:3,type:'turn/end',data:{turn:'t'}}]) await f.engine.frame({type:'session/event',sessionId:'s',event});
     await f.engine.flushOutbox(); assert.equal(f.sends.length,replyMode==='auto'?1:0);
+    if (replyMode === 'auto') assert.equal(f.sends[0].content, '【AI回复】\nreply');
   }
 });
 test('工具已发送后 auto 模式不重复转发',async t=>{
@@ -69,4 +71,65 @@ test('重连快照回放游标后的未结束回合，不重发历史完成回�
   const snapshot={records:[{event:{seq:2,type:'assistant/message',data:{turn:'t',message:{content:[{type:'text',text:'recovered'}]}}}},{event:{seq:3,type:'turn/end',data:{turn:'t'}}}]};
   await f.engine.frame({type:'session/snapshot',sessionId:'s',snapshot}); await f.engine.frame({type:'session/snapshot',sessionId:'s',snapshot});
   await f.engine.flushOutbox(); assert.equal(f.sends.length,1);
+});
+
+test('C# 重建基线不投递历史，未知发送方 AI 回声不进入 inbox', async t => {
+  const f = fixture(t);
+  f.store.data.baselines.Alice = ['legacy-python-id'];
+  f.setRows([row('native-old', '历史', {senderKnown:false, baselineOnly:true})]);
+  await f.engine.poll();
+  assert.equal(f.store.data.inbox.length, 0);
+  f.setRows([
+    row('native-old', '历史', {senderKnown:false, baselineOnly:true}),
+    row('native-new', '新消息', {senderKnown:false}),
+    row('native-echo', '【AI回复】\n你好', {senderKnown:false})
+  ]);
+  await f.engine.poll(); await f.engine.poll();
+  assert.deepEqual(f.store.data.inbox.map(x => x.content), ['新消息']);
+});
+
+test('配置模型标识后所有出站带标识，回声仍被过滤', async t => {
+  const f = fixture(t, {modelLabel:'测试模型'});
+  await f.engine.send({to_user:'Alice',message:'你好',request_id:'model-label'});
+  assert.equal(f.sends[0].content, '【AI回复｜测试模型】\n你好');
+  f.setRows([]); await f.engine.poll();
+  f.setRows([row('echo', f.sends[0].content, {senderKnown:false})]);
+  await f.engine.poll();
+  assert.equal(f.store.data.inbox.length, 0);
+});
+
+test('唤醒词缓存历史，触发时一次打包最近 N 条，重启去重', async t => {
+  const f = fixture(t, {wake:{enabled:true,word:'小助手',historyCount:3}});
+  f.setRows([row('history','旧消息',{baselineOnly:true})]); await f.engine.poll();
+  f.setRows([row('a','普通消息1')]); await f.engine.poll();
+  f.setRows([row('a','普通消息1'),row('b','普通消息2')]); await f.engine.poll();
+  assert.equal(f.store.data.inbox.length,0);
+  f.setRows([row('a','普通消息1'),row('b','普通消息2'),row('c','小助手 总结一下')]);
+  await f.engine.poll(); await f.engine.poll();
+  assert.equal(f.store.data.inbox.length,1);
+  assert.deepEqual(f.store.data.inbox[0].context.map(x=>x.id), ['a','b','c']);
+  await f.engine.drain();
+  const prompts = f.calls.filter(([m]) => m === 'session/prompt');
+  assert.equal(prompts.length,1);
+  assert.match(prompts[0][1].content[0].text,/普通消息1/);
+  assert.doesNotMatch(prompts[0][1].content[0].text,/旧消息/);
+  assert.equal(new Store(f.dir).data.inbox.length,1);
+});
+
+test('等待 DSH 回答时无需再次唤醒', async t => {
+  const f = fixture(t, {wake:{enabled:true,word:'小助手',historyCount:3}});
+  f.setRows([]); await f.engine.poll();
+  f.store.data.pending.Alice={type:'question',clientId:'c',eventId:'e',questions:[{id:'q'}]};
+  f.setRows([row('answer','是的')]); await f.engine.poll(); await f.engine.drain();
+  assert.equal(f.calls.filter(([m])=>m==='respond').length,1);
+  assert.equal(f.calls.filter(([m])=>m==='session/prompt').length,0);
+});
+
+test('指定已有 session 时复用并持久化，不创建新会话', async t => {
+  const f=fixture(t,{chats:[{name:'Alice',kind:'private',enabled:true,sessionId:'session-fixed'}]});
+  f.store.data.sessions.Alice='session-old';
+  assert.equal(await f.engine.ensureSession('Alice'),'session-fixed');
+  assert.equal(f.store.data.sessions.Alice,'session-fixed');
+  assert.equal(new Store(f.dir).data.sessions.Alice,'session-fixed');
+  assert.equal(f.calls.length,0);
 });

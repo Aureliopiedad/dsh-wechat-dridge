@@ -2,6 +2,10 @@ import fs from 'node:fs';
 import {randomUUID} from 'node:crypto';
 import {permitted} from './config.js';
 
+const AI_PREFIX = '【AI回复】\n';
+const markedReply = text => text.startsWith(AI_PREFIX) ? text : AI_PREFIX + text;
+const isMarkedReply = text => /^【AI回复(?:｜[^】\r\n]+)?】\r?\n/.test(text);
+
 export class Engine {
   constructor(config, store, worker, api) {
     Object.assign(this, {config, store, worker, api});
@@ -18,23 +22,35 @@ export class Engine {
       try {
         const rows = await this.worker.call('snapshot', {chat: chat.name});
         const previous = this.store.data.baselines[chat.name];
+        const wake = {...this.config.wake, answering:Boolean(this.store.data.pending[chat.name])};
         // First observation is a baseline, never replay the visible chat history.
         if (!previous && this.config.wechat.baselineOnFirstStart !== false) {
-          this.store.ingest([], {[chat.name]: rows.map(r => r.id)}); continue;
+          const history = wake.enabled ? rows.filter(r => permitted(this.config, r) && !isMarkedReply(r.content)).map(r => ({...r,baselineOnly:true})) : [];
+          this.store.ingest(history, {[chat.name]: rows.map(r => r.id)}, wake); continue;
         }
         const known = new Set(previous || []);
         const incoming = rows.filter(r => {
-          if (known.has(r.id) || !permitted(this.config, r)) return false;
+          if (r.baselineOnly || known.has(r.id) || !permitted(this.config, r)) return false;
+          if (r.senderKnown === false && isMarkedReply(r.content)) return false;
           // 文件传输助手允许接收手机端的自身消息；排除本 bridge 刚发出的回声。
-          const echo = r.self && this.store.data.outbox.find(j => j.chat === r.chat && j.content === r.content && !j.file && j.status === 'submitted' && !j.echoId && Date.now() - j.submittedAt < 120000);
+          const echo = r.self && this.store.data.outbox.find(j => j.chat === r.chat && markedReply(j.content) === r.content && !j.file && j.status === 'submitted' && !j.echoId && Date.now() - j.submittedAt < 120000);
           if (echo) {echo.echoId = r.id; return false;}
           return true;
         });
-        this.store.ingest(incoming, {[chat.name]: rows.map(r => r.id)});
+        this.store.ingest(incoming, {[chat.name]: rows.map(r => r.id)}, wake);
       } catch (error) { console.error(`[微信读取 ${chat.name}] ${error.message}`); }
     }
   }
   async ensureSession(chat) {
+    const configured = this.config.chats.find(c => c.name === chat)?.sessionId;
+    if (configured) {
+      if (this.store.data.sessions[chat] !== configured) {
+        this.store.data.sessions[chat] = configured;
+        this.store.save();
+        this.api.events.follow(configured);
+      }
+      return configured;
+    }
     let sessionId = this.store.data.sessions[chat];
     if (sessionId) return sessionId;
     fs.mkdirSync(this.config.sessionCwd, {recursive: true});
@@ -64,7 +80,10 @@ export class Engine {
             const rules = this.config.replyMode === 'tools'
               ? '请使用 wechat_send_message 工具向此聊天发送回复，最终文本不会自动转发。'
               : '最终回复会自动转发；如果已经调用微信发送工具则不会重复转发。';
-            const content = `[微信消息] chat=${JSON.stringify(job.chat)}, sender=${JSON.stringify(job.sender)}, sessionId=${sessionId}\n${rules}\n调用发送工具时请传入 session_id=${sessionId} 和 to_user=${JSON.stringify(job.chat)}。\n消息内容：\n${job.content}`;
+            const body = job.wakeTriggered
+              ? `唤醒消息：${job.content}\n以下为截至唤醒消息的最近 ${job.context.length} 条对话记录（按时间顺序，包含唤醒消息；仅作上下文）：\n${job.context.map((m,i) => `${i+1}. ${JSON.stringify({sender:m.sender, text:m.content})}`).join('\n')}`
+              : job.content;
+            const content = `[微信消息] chat=${JSON.stringify(job.chat)}, sender=${JSON.stringify(job.sender)}, sessionId=${sessionId}\n${rules}\n调用发送工具时请传入 session_id=${sessionId} 和 to_user=${JSON.stringify(job.chat)}。\n消息内容：\n${body}`;
             const accepted = await this.rpc('session/prompt', {sessionId, requestId: job.requestId, mode: 'queue', content: [{type: 'text', text: content}]});
             if (accepted?.command?.text) await this.send({to_user: job.chat, message: accepted.command.text, request_id: `command:${job.id}`});
           }
@@ -122,7 +141,10 @@ export class Engine {
     if (['uncertain', 'failed'].includes(job.status)) throw new Error('上次发送结果不确定，请检查微信；需要重发时使用新 request_id');
     job.status = 'sending'; this.store.save();
     try {
-      const result = await this.worker.call('send', {chat: to_user, content: message, file});
+      const label = String(this.config.modelLabel || '').replace(/[\r\n【】]/g, '').trim();
+      const prefix = label ? `【AI回复｜${label}】\n` : AI_PREFIX;
+      const content = isMarkedReply(message) ? message : prefix + message;
+      const result = await this.worker.call('send', {chat: to_user, content, file});
       job.status = 'submitted'; job.result = result; job.submittedAt = Date.now();
       // 同步写入当前 turn，避免 turn/end 先到导致工具发送后又自动转发。
       if (session_id && this.store.data.turns[session_id]) this.store.data.turns[session_id].sent = true;

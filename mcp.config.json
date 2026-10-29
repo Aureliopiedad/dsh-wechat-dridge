@@ -1,9 +1,9 @@
 {
   "mcpServers": {
     "wechat": {
-      "command": "C:\\Users\\aurelito\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\node\\bin\\node.exe",
+      "command": "C:\\Program Files\\nodejs\\node.exe",
       "args": [
-        "C:\\Users\\aurelito\\Documents\\Codex\\2026-10-28\\wo-x\\outputs\\wechat-bridge\\src\\mcp-server.js"
+        "C:\\Users\\aurelito\\Desktop\\git\\wechat-bridge\\src\\mcp-server.js"
       ]
     }
   }

@@ -20,6 +20,10 @@ let engine;
 const facade = new Proxy({}, {get: (_, key) => {if (!engine) throw new Error('bridge 正在启动'); return typeof engine[key] === 'function' ? engine[key].bind(engine) : engine[key];}});
 const server = await serve(facade, token, config.http.port);
 const store = new Store(stateDir);
+for (const chat of config.chats.filter(c => c.enabled && c.sessionId)) {
+  store.data.sessions[chat.name] = chat.sessionId;
+}
+store.save();
 const api = new NodeApiClient(config.dsh.baseUrl, undefined, {token: config.dsh.authToken || '', tokenExplicit: Boolean(config.dsh.authToken), allowRemote: Boolean(config.dsh.allowRemote)});
 const worker = new Worker(config); worker.start();
 engine = new Engine(config, store, worker, api);

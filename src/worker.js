@@ -5,8 +5,8 @@ import {ROOT} from './config.js';
 export class Worker {
   constructor(config) { this.config = config; this.nextId = 0; this.pending = new Map(); }
   start() {
-    const p = this.config.python || {};
-    this.child = spawn(p.command || 'py', [...(p.args || ['-3.12']), '-u', path.join(ROOT, 'python', 'worker.py')], {cwd: ROOT, windowsHide: true, stdio: ['pipe','pipe','pipe']});
+    const p = this.config.worker || {};
+    this.child = spawn(p.command ? path.resolve(ROOT, p.command) : path.join(ROOT, 'native', 'Worker.exe'), p.args || [], {cwd: ROOT, windowsHide: true, stdio: ['pipe','pipe','pipe']});
     this.child.stderr.on('data', b => process.stderr.write(b));
     readline.createInterface({input: this.child.stdout}).on('line', line => {
       let msg; try {msg = JSON.parse(line);} catch {console.error('[worker] 非协议输出:', line); return;}

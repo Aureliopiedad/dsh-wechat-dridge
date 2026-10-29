@@ -13,7 +13,7 @@ async function call(method, params) {
     const body = await r.json();
     if (!r.ok || !body.ok) throw new Error(body.error || `HTTP ${r.status}`);
     return {content: [{type: 'text', text: JSON.stringify(body.value)}]};
-  } catch (e) {return {isError: true, content: [{type:'text', text: `微信 bridge 调用失败：${e.message}。请确认 npm start 正在运行。`}]};}
+  } catch (e) {return {isError: true, content: [{type:'text', text: `微信 bridge 调用失败：${e.message}`}]};}
 }
 const target = z.string().min(1).describe('已启用聊天的精确名称');
 const requestId = z.string().min(1).max(200).describe('本次发送的唯一标识；重试必须使用同一标识，避免重复发送');

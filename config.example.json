@@ -2,7 +2,8 @@
   "dsh": {"baseUrl": "http://127.0.0.1:3080", "authToken": "", "allowRemote": false, "agentPreset": "standard"},
   "sessionCwd": "./state/agents",
   "workspaceTitle": "微信聊天",
-  "python": {"command": "py", "args": ["-3.12"]},
+  "worker": {"command": "native/Worker.exe", "args": []},
+  "wake": {"enabled": true, "word": "小助手", "historyCount": 20},
   "wechat": {"pollIntervalMs": 3000, "baselineOnFirstStart": true},
   "chats": [
     {"name": "文件传输助手", "kind": "private", "allowSelf": true, "enabled": false, "mentionOnly": false, "senders": []}
@@ -14,3 +15,5 @@
   "maxMessageChars": 1800,
   "sendDelayMs": 800
 }
+
+
